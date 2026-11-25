@@ -234,4 +234,118 @@
       requestAnimationFrame(loop);
     })();
   }
+  /* ---------- Robot qui attrape le curseur pendant le scroll ---------- */
+  (function () {
+    var svg = document.getElementById('robot');
+    if (!svg) return;
+    var $ = function (id) { return document.getElementById(id); };
+    var bot = $('bot'), head = $('head'), mouth = $('mouth'), led = $('led');
+    var pupilL = $('pupilL'), pupilR = $('pupilR');
+
+    var W = window.innerWidth, H = window.innerHeight;
+    window.addEventListener('resize', function () { W = window.innerWidth; H = window.innerHeight; });
+
+    var cx = W / 2, cy = H / 2;
+    window.addEventListener('mousemove', function (e) { cx = e.clientX; cy = e.clientY; }, { passive: true });
+    window.addEventListener('touchmove', function (e) {
+      var t = e.touches && e.touches[0];
+      if (t) { cx = t.clientX; cy = t.clientY; }
+    }, { passive: true });
+
+    var hands = [
+      { side: -1, arm: $('armL'), el: $('handL'), x: 0, y: 0 },
+      { side: 1, arm: $('armR'), el: $('handR'), x: 0, y: 0 }
+    ];
+    hands.forEach(function (h) { h.fingers = h.el.querySelectorAll('.finger'); });
+
+    var shown = false, grabbing = false, pressed = false;
+    var grabTimer = null, lastY = window.scrollY || 0;
+    var kick = 0, ap = 0, g = 0;
+
+    function setShown() {
+      shown = (window.scrollY || 0) > 120;
+      svg.classList.toggle('show', shown);
+    }
+    window.addEventListener('scroll', function () {
+      var y = window.scrollY || 0;
+      kick = Math.min(14, kick + Math.abs(y - lastY) * 0.15);
+      lastY = y;
+      grabbing = true;
+      clearTimeout(grabTimer);
+      grabTimer = setTimeout(function () { grabbing = false; }, 650);
+      setShown();
+    }, { passive: true });
+    window.addEventListener('mousedown', function () { pressed = true; });
+    window.addEventListener('mouseup', function () { pressed = false; });
+    setShown();
+
+    function frame(t) {
+      var scale = W < 680 ? 0.8 : 1;
+      ap += ((shown ? 1 : 0) - ap) * 0.08;
+      kick *= 0.9;
+
+      var bx = W - 62 * scale - 10;
+      var by = H - 14 + (1 - ap) * 170 - (Math.sin(t / 450) * 2 + kick);
+      bot.setAttribute('transform', 'translate(' + bx + ' ' + by + ') scale(' + scale + ')');
+
+      // tête + regard
+      var ang = Math.max(-18, Math.min(18, ((cx - bx) / W) * 40));
+      head.setAttribute('transform', 'rotate(' + ang + ' 0 -38)');
+      var ex = bx, ey = by - 53 * scale;
+      var ddx = cx - ex, ddy = cy - ey, dd = Math.hypot(ddx, ddy) || 1;
+      var k = Math.min(3.4, dd / 40);
+      var tr = 'translate(' + (ddx / dd * k) + ' ' + (ddy / dd * k) + ')';
+      pupilL.setAttribute('transform', tr);
+      pupilR.setAttribute('transform', tr);
+
+      // état "j'attrape"
+      var wantGrab = grabbing || pressed;
+      g += ((wantGrab ? 1 : 0) - g) * 0.15;
+      mouth.setAttribute('d', g > 0.5 ? 'M-8 -45 Q0 -36 8 -45' : 'M-7 -44 Q0 -40 7 -44');
+      led.classList.toggle('on', g > 0.5);
+
+      hands.forEach(function (h) {
+        var sx = bx + h.side * 30 * scale, sy = by - 20 * scale;
+        var dx = cx - sx, dy = cy - sy, dist = Math.hypot(dx, dy) || 1;
+        var idle = 150 * scale, tx, ty;
+
+        if (wantGrab) {                       // les mains vont chercher le curseur
+          tx = cx + h.side * 16; ty = cy + 6;
+        } else if (dist < idle * 1.7) {       // curseur proche : la main pointe vers lui
+          var r = Math.min(dist, idle);
+          tx = sx + dx / dist * r; ty = sy + dy / dist * r;
+        } else {                              // repos : bras le long du corps
+          tx = sx + h.side * 18 * scale + Math.sin(t / 600 + h.side) * 3;
+          ty = sy + 44 * scale + Math.cos(t / 500) * 2;
+        }
+        h.x += (tx - h.x) * 0.14;
+        h.y += (ty - h.y) * 0.14;
+
+        var len = Math.hypot(h.x - sx, h.y - sy);
+        var qx = (sx + h.x) / 2, qy = (sy + h.y) / 2 + Math.min(70, len * 0.22);
+        h.arm.setAttribute('d', 'M' + sx + ' ' + sy + ' Q' + qx + ' ' + qy + ' ' + h.x + ' ' + h.y);
+
+        var a = Math.atan2(h.y - sy, h.x - sx);
+        h.el.setAttribute('transform', 'translate(' + h.x + ' ' + h.y + ') rotate(' + (a * 180 / Math.PI) + ')');
+
+        var spread = [-0.6, 0, 0.6], fl = 13 - 8 * g;
+        for (var i = 0; i < 3; i++) {
+          var fa = spread[i] * (1 - 0.6 * g), c = Math.cos(fa), s = Math.sin(fa);
+          h.fingers[i].setAttribute('x1', c * 9); h.fingers[i].setAttribute('y1', s * 9);
+          h.fingers[i].setAttribute('x2', c * (9 + fl)); h.fingers[i].setAttribute('y2', s * (9 + fl));
+        }
+      });
+    }
+
+    // position de départ des mains (au repos)
+    var sc0 = W < 680 ? 0.8 : 1, bx0 = W - 62 * sc0 - 10, by0 = H - 14;
+    hands.forEach(function (h) { h.x = bx0 + h.side * 48 * sc0; h.y = by0 + 24 * sc0; });
+
+    if (reduceMotion) {                      // pas d'animation : robot fixe
+      shown = true; ap = 1; svg.classList.add('show');
+      frame(0);
+      return;
+    }
+    (function loop(t) { frame(t); requestAnimationFrame(loop); })(0);
+  })();
 })();
